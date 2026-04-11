@@ -42,5 +42,6 @@ jobs:
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          cp ./target/x86_64-unknown-linux-gnu/release/hn-scored ./hn-scored-x86_64-unknown-linux-gnu
           gh release delete latest --cleanup-tag -y || true
-          gh release create latest ./target/x86_64-unknown-linux-gnu/release/hn-scored#hn-scored-x86_64-unknown-linux-gnu --title latest --notes "Latest rolling build"
+          gh release create latest ./hn-scored-x86_64-unknown-linux-gnu --title latest --notes "Latest rolling build"
