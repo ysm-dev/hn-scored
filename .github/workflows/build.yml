@@ -1,0 +1,46 @@
+name: build
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo install cargo-llvm-cov
+
+      - run: cargo fmt --check
+      - run: cargo clippy -- -D warnings
+      - run: cargo test
+      - run: cargo llvm-cov --workspace --all-features --fail-under-lines 90 --ignore-filename-regex 'tests/e2e.rs'
+      - run: |
+          find src -name '*.rs' | while read f; do
+            lines=$(wc -l < "$f")
+            if [ "$lines" -gt 200 ]; then
+              echo "FAIL: $f has $lines lines (max 200)" && exit 1
+            fi
+          done
+      - run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --cleanup-tag -y || true
+          gh release create latest ./target/x86_64-unknown-linux-gnu/release/hn-scored#hn-scored-x86_64-unknown-linux-gnu --title latest --notes "Latest rolling build"

@@ -1,0 +1,26 @@
+/feeds/article/*.xml
+  Content-Type: application/rss+xml; charset=utf-8
+  Cache-Control: public, max-age=60
+
+/feeds/comments/*.xml
+  Content-Type: application/rss+xml; charset=utf-8
+  Cache-Control: public, max-age=60
+
+/feeds/article/*.atom
+  Content-Type: application/atom+xml; charset=utf-8
+  Cache-Control: public, max-age=60
+
+/feeds/comments/*.atom
+  Content-Type: application/atom+xml; charset=utf-8
+  Cache-Control: public, max-age=60
+
+/feeds/article/*.json
+  Content-Type: application/feed+json; charset=utf-8
+  Cache-Control: public, max-age=60
+
+/feeds/comments/*.json
+  Content-Type: application/feed+json; charset=utf-8
+  Cache-Control: public, max-age=60
+
+/index.html
+  Cache-Control: public, max-age=60

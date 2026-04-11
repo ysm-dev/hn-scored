@@ -1,0 +1,69 @@
+name: update
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-feeds
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ./bin
+          gh release download latest --pattern "hn-scored-x86_64-unknown-linux-gnu" --dir ./bin
+          chmod +x ./bin/hn-scored-x86_64-unknown-linux-gnu
+
+      - run: npm install -g wrangler@4
+
+      - env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          for i in 1 2 3 4 5; do
+            git pull --rebase || {
+              git checkout --theirs state.json
+              git add state.json
+              git rebase --continue
+            }
+
+            set +e
+            ./bin/hn-scored-x86_64-unknown-linux-gnu --state ./state.json --output ./dist
+            code=$?
+            set -e
+
+            if [ "$code" -eq 0 ]; then
+              if ! git diff --quiet -- state.json; then
+                timestamp=$(node -e "console.log(JSON.parse(require('fs').readFileSync('state.json', 'utf8')).last_output_change_at)")
+                git add state.json
+                git commit -m "chore: update state ($timestamp)"
+                git push
+              fi
+              if ! wrangler deploy; then
+                echo "deploy failed"
+              fi
+            elif [ "$code" -eq 1 ]; then
+              echo "fatal cycle error"
+            elif [ "$code" -ne 2 ]; then
+              echo "unexpected exit code: $code"
+            fi
+
+            if [ "$i" -lt 5 ]; then
+              sleep 60
+            fi
+          done
