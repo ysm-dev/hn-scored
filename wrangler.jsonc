@@ -2,6 +2,12 @@
   "name": "hn-scored",
   "compatibility_date": "2026-04-11",
   "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "hn.ysm.dev",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "./dist/"
   }
