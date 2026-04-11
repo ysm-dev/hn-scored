@@ -2,11 +2,12 @@ name: update
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "2/5 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: update-feeds
@@ -15,6 +16,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -34,8 +36,62 @@ jobs:
       - env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for i in 1 2 3 4 5; do
+          set -euo pipefail
+
+          interval=60
+          max_runtime=720
+          start_epoch=$(date +%s)
+          deadline=$((start_epoch + max_runtime))
+          next_tick=$start_epoch
+          iteration=0
+          successor_queued=false
+
+          queue_successor() {
+            if [ "$successor_queued" = true ]; then
+              return 0
+            fi
+
+            if gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/update.yml/dispatches" \
+              -f ref="${GITHUB_REF_NAME}" >/dev/null; then
+              successor_queued=true
+              echo "queued successor run"
+            else
+              echo "dispatch retry failed"
+            fi
+          }
+
+          queue_successor
+
+          while :; do
+            now=$(date +%s)
+            if [ "$now" -ge "$deadline" ]; then
+              break
+            fi
+
+            if [ "$now" -lt "$next_tick" ]; then
+              sleep $((next_tick - now))
+            fi
+
+            iter_start=$(date +%s)
+            if [ "$iter_start" -ge "$deadline" ]; then
+              break
+            fi
+
+            iteration=$((iteration + 1))
+            lag=$((iter_start - next_tick))
+            if [ "$lag" -lt 0 ]; then
+              lag=0
+            fi
+
+            echo "--- iteration $iteration (elapsed=$((iter_start - start_epoch))s lag=${lag}s queued=${successor_queued}) ---"
+
+            queue_successor
+
             git pull --rebase || {
               git checkout --theirs state.json
               git add state.json
@@ -63,7 +119,5 @@ jobs:
               echo "unexpected exit code: $code"
             fi
 
-            if [ "$i" -lt 5 ]; then
-              sleep 60
-            fi
+            next_tick=$((next_tick + interval))
           done
