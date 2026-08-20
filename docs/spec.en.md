@@ -160,7 +160,7 @@ Article feed falls back to the HN comments URL for these.
     <generator>hn-scored</generator>
     <atom:link href="https://hn.ysm.dev/feeds/article/100.xml" rel="self" type="application/rss+xml"/>
     <item>
-      <title>My YC app: Dropbox - Throw away your USB drive</title>
+      <title>My YC app: Dropbox - Throw away your USB drive (3h 32m)</title>
       <link>http://www.getdropbox.com/u/2/screencast.html</link>
       <guid isPermaLink="false">https://news.ycombinator.com/item?id=8863</guid>
       <pubDate>Mon, 14 Apr 2025 12:34:56 +0000</pubDate>
@@ -173,7 +173,7 @@ Article feed falls back to the HN comments URL for these.
 
 | Field | Value |
 |-------|-------|
-| `<title>` | Original HN title only. No score (scores change; RSS titles don't update). |
+| `<title>` | HN title, plus an elapsed-time suffix showing how long the story took to reach this feed's threshold after being posted: `"{title} ({elapsed})"`. Omitted (title is unchanged) for the threshold-0 "All Stories" feed and when `story_time` is unknown (`0`). Exact algorithm: see 18.11. |
 | `<link>` | Original URL (article) or HN comments (comments feed). |
 | `<guid>` | `https://news.ycombinator.com/item?id={id}`. Same across all feeds. |
 | `<pubDate>` | Timestamp when the story first crossed this feed's threshold. |
@@ -696,7 +696,7 @@ Triggered on: `schedule: */5 * * * *` and `workflow_dispatch`.
   <subtitle>Hacker News stories with 100 or more points</subtitle>
   <generator>hn-scored</generator>
   <entry>
-    <title>My YC app: Dropbox - Throw away your USB drive</title>
+    <title>My YC app: Dropbox - Throw away your USB drive (3h 32m)</title>
     <link href="http://www.getdropbox.com/u/2/screencast.html" rel="alternate"/>
     <id>https://news.ycombinator.com/item?id=8863</id>
     <updated>2025-04-14T12:45:56Z</updated>
@@ -713,6 +713,7 @@ Triggered on: `schedule: */5 * * * *` and `workflow_dispatch`.
 | `<feed><updated>` | Latest `last_output_change_at` among rendered entries, or `1970-01-01T00:00:00Z` if the feed is empty. Same instant as RSS `<lastBuildDate>`. |
 | `<feed><link rel="self">` | URL of this feed. |
 | `<entry><id>` | Same as RSS `<guid>`: HN item URL. |
+| `<entry><title>` | Same rule as RSS `<title>` (see 4.4 and 18.11). |
 | `<entry><updated>` | Story `last_output_change_at`. |
 | `<entry><published>` | Threshold crossing time for this feed. |
 | `<entry><author><name>` | HN username. Omit `<author>` entirely if `by` is empty. |
@@ -730,7 +731,7 @@ Triggered on: `schedule: */5 * * * *` and `workflow_dispatch`.
   "items": [
     {
       "id": "https://news.ycombinator.com/item?id=8863",
-      "title": "My YC app: Dropbox - Throw away your USB drive",
+      "title": "My YC app: Dropbox - Throw away your USB drive (3h 32m)",
       "url": "http://www.getdropbox.com/u/2/screencast.html",
       "external_url": "https://news.ycombinator.com/item?id=8863",
       "content_text": "423 points | 156 comments | getdropbox.com/u/2/screencast.html",
@@ -745,6 +746,7 @@ Triggered on: `schedule: */5 * * * *` and `workflow_dispatch`.
 | JSON Feed Field | Article feed | Comments feed |
 |-----------------|-------------|---------------|
 | `items[].id` | HN item URL | HN item URL |
+| `items[].title` | Same rule as RSS `<title>` (see 4.4 and 18.11). | Same |
 | `items[].url` | Original article URL | HN comments URL |
 | `items[].external_url` | HN comments URL | Original article URL (swapped) |
 | `items[].content_text` | Plain text. Same as RSS description. | Same |
@@ -1117,6 +1119,46 @@ JavaScript Clipboard API (`navigator.clipboard.writeText()`).
 Inline `<script>` in the HTML. No external JS dependencies.
 If JS is disabled, the URL is still visible as plain text and
 can be manually copied. No functionality loss, just no button.
+
+### 18.11 Title Elapsed-Time Suffix
+
+RSS `<title>`, Atom `<entry><title>`, and JSON Feed `items[].title` all
+append how long the story took to reach **this feed's threshold** after
+being posted to HN.
+
+**Formula**:
+
+```
+total_minutes = floor((thresholds[N] - story_time) in minutes), clamped to >= 0
+days    = total_minutes / (24 * 60)
+hours   = (total_minutes % (24 * 60)) / 60
+minutes = total_minutes % 60
+```
+
+Where `N` is the threshold of the feed being rendered (`thresholds[N]` is
+the same instant already used as `<pubDate>` / `<published>` /
+`date_published` for that item).
+
+**Rendering**:
+- Build the suffix as `"{days}d {hours}h {minutes}m"`.
+- The `d` segment is omitted entirely if `days == 0`.
+- The `h` segment is omitted entirely if `hours == 0`.
+- The `m` segment is **always** present, even when `0`.
+- Final title: `"{title} ({suffix})"`.
+
+Examples: `(2d 3h 32m)`, `(3h 32m)`, `(32m)`, `(1d 0m)`, `(1h 0m)`.
+
+**Exclusions** (title is the plain, unmodified HN title in these cases):
+- The threshold-0 "All Stories" feed. Threshold 0 is crossed at
+  first-seen time, so this figure would be near-zero noise on every item.
+- Any story with `story_time == 0` (the "missing `time` field" fallback
+  from 15.2). Computing elapsed time against the Unix epoch would produce
+  a meaningless multi-decade figure.
+
+This suffix does not change once written: `thresholds[N]` is write-once
+(3.2) and `story_time` does not change after a story is first tracked
+under normal operation, so unlike raw score, this value is safe to bake
+into a title that feed readers may cache.
 
 ---
 

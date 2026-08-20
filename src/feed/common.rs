@@ -51,7 +51,7 @@ pub fn build_view(
     let items: Vec<_> = entries
         .into_iter()
         .take(MAX_ITEMS_PER_FEED)
-        .map(|(story, published)| item_view(story, published, kind))
+        .map(|(story, published)| item_view(story, published, kind, threshold))
         .collect();
     let updated = items
         .iter()
@@ -93,7 +93,12 @@ pub fn mime_type(format: FeedFormat) -> &'static str {
     }
 }
 
-fn item_view(story: &Story, published: crate::time::Timestamp, kind: LinkKind) -> FeedItemView {
+fn item_view(
+    story: &Story,
+    published: crate::time::Timestamp,
+    kind: LinkKind,
+    threshold: u16,
+) -> FeedItemView {
     let article_url = if story.url.is_empty() {
         story.hn_url.clone()
     } else {
@@ -102,6 +107,11 @@ fn item_view(story: &Story, published: crate::time::Timestamp, kind: LinkKind) -
     let (link_url, external_url) = match kind {
         LinkKind::Article => (article_url, story.hn_url.clone()),
         LinkKind::Comments => (story.hn_url.clone(), article_url),
+    };
+    let title = if threshold == 0 || story.story_time <= 0 {
+        story.title.clone()
+    } else {
+        title_with_elapsed(story, &published)
     };
     FeedItemView {
         author: story.by.clone(),
@@ -116,8 +126,26 @@ fn item_view(story: &Story, published: crate::time::Timestamp, kind: LinkKind) -
             story.comments,
             description_domain(&story.url, story.id)
         ),
-        title: story.title.clone(),
+        title,
     }
+}
+
+/// Appends an elapsed-time suffix to the story title, e.g. "Title (2d 3h 32m)".
+/// `d`/`h` segments are omitted when zero; `m` is always shown.
+fn title_with_elapsed(story: &Story, published: &crate::time::Timestamp) -> String {
+    let total_minutes = published.minutes_since(story.story_time);
+    let days = total_minutes / (24 * 60);
+    let hours = (total_minutes % (24 * 60)) / 60;
+    let minutes = total_minutes % 60;
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{days}d"));
+    }
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    parts.push(format!("{minutes}m"));
+    format!("{} ({})", story.title, parts.join(" "))
 }
 
 fn feed_title(threshold: u16, kind: LinkKind) -> String {

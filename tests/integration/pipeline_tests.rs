@@ -176,6 +176,43 @@ async fn feed_caps_at_two_hundred_items_with_descending_id_tiebreak() {
 }
 
 #[tokio::test]
+async fn feed_title_includes_elapsed_time_since_post() {
+    let server = MockHnServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), &server.base_url());
+    server.set_lists(vec![9], vec![], vec![]).await;
+    server
+        .set_item(
+            9,
+            serde_json::json!({
+                "id": 9,
+                "type": "story",
+                "title": "Story 9",
+                "url": "https://example.com/9",
+                "score": 150,
+                "descendants": 4,
+                "by": "user9",
+                "time": 1_744_588_800 // 2025-04-14T00:00:00Z
+            }),
+        )
+        .await;
+    assert_eq!(
+        app::run_once(&config, fixed_time("2025-04-14T02:15:00Z"), None)
+            .await
+            .unwrap(),
+        0
+    );
+    let rss = fs::read_to_string(config.output_dir.join("feeds/article/100.xml")).unwrap();
+    assert!(rss.contains("<title>Story 9 (2h 15m)</title>"));
+    let atom = fs::read_to_string(config.output_dir.join("feeds/article/100.atom")).unwrap();
+    assert!(atom.contains("<title>Story 9 (2h 15m)</title>"));
+    let json = fs::read_to_string(config.output_dir.join("feeds/article/100.json")).unwrap();
+    assert!(json.contains("\"title\": \"Story 9 (2h 15m)\""));
+    let all_stories = fs::read_to_string(config.output_dir.join("feeds/article/0.xml")).unwrap();
+    assert!(all_stories.contains("<title>Story 9</title>"));
+}
+
+#[tokio::test]
 async fn firebase_requests_send_cache_control_max_age_sixty() {
     let server = MockHnServer::start().await;
     server.set_lists(vec![7], vec![], vec![]).await;

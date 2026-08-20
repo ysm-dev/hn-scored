@@ -32,6 +32,14 @@ impl Timestamp {
     pub fn rfc2822(&self) -> String {
         self.0.to_rfc2822()
     }
+
+    pub fn minutes_since(&self, unix_seconds: i64) -> i64 {
+        let start = Utc
+            .timestamp_opt(unix_seconds, 0)
+            .single()
+            .unwrap_or(self.0);
+        (self.0 - start).num_minutes().max(0)
+    }
 }
 
 impl Deref for Timestamp {

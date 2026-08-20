@@ -160,7 +160,7 @@ article 피드는 이 경우 HN 댓글 URL로 fallback한다.
     <generator>hn-scored</generator>
     <atom:link href="https://hn.ysm.dev/feeds/article/100.xml" rel="self" type="application/rss+xml"/>
     <item>
-      <title>My YC app: Dropbox - Throw away your USB drive</title>
+      <title>My YC app: Dropbox - Throw away your USB drive (3h 32m)</title>
       <link>http://www.getdropbox.com/u/2/screencast.html</link>
       <guid isPermaLink="false">https://news.ycombinator.com/item?id=8863</guid>
       <pubDate>Mon, 14 Apr 2025 12:34:56 +0000</pubDate>
@@ -173,7 +173,7 @@ article 피드는 이 경우 HN 댓글 URL로 fallback한다.
 
 | 필드 | 값 |
 |------|----|
-| `<title>` | 원본 HN 제목만 사용. 점수는 포함하지 않음. 점수는 바뀌지만 RSS 제목은 갱신되지 않음. |
+| `<title>` | HN 제목 뒤에 해당 피드의 threshold에 도달하기까지 걸린 시간을 붙인다: `"{title} ({elapsed})"`. threshold 0("All Stories") 피드와 `story_time`을 알 수 없는 경우(`0`)에는 제목이 그대로 유지된다(접미사 없음). 정확한 알고리즘은 18.11 참고. |
 | `<link>` | 원본 URL (article) 또는 HN 댓글 URL (comments 피드). |
 | `<guid>` | `https://news.ycombinator.com/item?id={id}`. 모든 피드에서 동일. |
 | `<pubDate>` | 해당 피드의 threshold를 처음 넘은 시각. |
@@ -691,7 +691,7 @@ state-level `last_output_change_at`에서 파생되어야 한다.
   <subtitle>Hacker News stories with 100 or more points</subtitle>
   <generator>hn-scored</generator>
   <entry>
-    <title>My YC app: Dropbox - Throw away your USB drive</title>
+    <title>My YC app: Dropbox - Throw away your USB drive (3h 32m)</title>
     <link href="http://www.getdropbox.com/u/2/screencast.html" rel="alternate"/>
     <id>https://news.ycombinator.com/item?id=8863</id>
     <updated>2025-04-14T12:45:56Z</updated>
@@ -708,6 +708,7 @@ state-level `last_output_change_at`에서 파생되어야 한다.
 | `<feed><updated>` | 렌더된 엔트리 중 가장 최신 `last_output_change_at`, 빈 피드면 `1970-01-01T00:00:00Z`. RSS `<lastBuildDate>`와 같은 시각. |
 | `<feed><link rel="self">` | 이 피드의 URL. |
 | `<entry><id>` | RSS `<guid>`와 동일한 HN item URL. |
+| `<entry><title>` | RSS `<title>`과 동일한 규칙 (4.4, 18.11 참고). |
 | `<entry><updated>` | story `last_output_change_at`. |
 | `<entry><published>` | 이 피드에 대한 threshold crossing 시각. |
 | `<entry><author><name>` | HN 사용자명. `by`가 비어 있으면 `<author>` 자체를 생략한다. |
@@ -725,7 +726,7 @@ state-level `last_output_change_at`에서 파생되어야 한다.
   "items": [
     {
       "id": "https://news.ycombinator.com/item?id=8863",
-      "title": "My YC app: Dropbox - Throw away your USB drive",
+      "title": "My YC app: Dropbox - Throw away your USB drive (3h 32m)",
       "url": "http://www.getdropbox.com/u/2/screencast.html",
       "external_url": "https://news.ycombinator.com/item?id=8863",
       "content_text": "423 points | 156 comments | getdropbox.com/u/2/screencast.html",
@@ -740,6 +741,7 @@ state-level `last_output_change_at`에서 파생되어야 한다.
 | JSON Feed 필드 | Article 피드 | Comments 피드 |
 |----------------|-------------|---------------|
 | `items[].id` | HN item URL | HN item URL |
+| `items[].title` | RSS `<title>`과 동일한 규칙 (4.4, 18.11 참고). | 동일 |
 | `items[].url` | 원본 기사 URL | HN 댓글 URL |
 | `items[].external_url` | HN 댓글 URL | 원본 기사 URL (교차) |
 | `items[].content_text` | 평문. RSS description과 동일. | 동일 |
@@ -1105,6 +1107,48 @@ JavaScript Clipboard API (`navigator.clipboard.writeText()`)를 사용한다.
 HTML 내 인라인 `<script>`를 사용하며, 외부 JS 의존성은 없다.
 JS가 비활성화되어도 URL은 평문으로 보이므로 수동 복사가 가능하다.
 기능 손실은 없고 버튼만 비활성화된다.
+
+### 18.11 제목 경과 시간 접미사
+
+RSS `<title>`, Atom `<entry><title>`, JSON Feed `items[].title` 모두
+스토리가 게시된 뒤 **해당 피드의 threshold**에 도달하기까지 걸린 시간을
+덧붙인다.
+
+**계산식**:
+
+```
+total_minutes = floor((thresholds[N] - story_time)을 분 단위로), 0 이상으로 clamp
+days    = total_minutes / (24 * 60)
+hours   = (total_minutes % (24 * 60)) / 60
+minutes = total_minutes % 60
+```
+
+여기서 `N`은 렌더링 중인 피드의 threshold이다 (`thresholds[N]`은 해당
+항목의 `<pubDate>` / `<published>` / `date_published`에 이미 사용되는
+시각과 동일하다).
+
+**렌더링 규칙**:
+- 접미사는 `"{days}d {hours}h {minutes}m"` 형식으로 만든다.
+- `days == 0`이면 `d` 구간은 완전히 생략한다.
+- `hours == 0`이면 `h` 구간은 완전히 생략한다.
+- `m` 구간은 값이 `0`이어도 **항상** 표시한다.
+- 최종 제목: `"{title} ({suffix})"`.
+
+예시: `(2d 3h 32m)`, `(3h 32m)`, `(32m)`, `(1d 0m)`, `(1h 0m)`.
+
+**예외** (아래 경우에는 원본 HN 제목을 그대로 사용하고 접미사를 붙이지
+않는다):
+- Threshold 0 ("All Stories") 피드. Threshold 0은 최초 발견 시점에
+  즉시 충족되므로, 모든 항목에서 거의 0에 가까운 잡음이 된다.
+- `story_time == 0`인 스토리 (15.2의 "누락된 `time` 필드" 폴백). Unix
+  epoch를 기준으로 경과 시간을 계산하면 의미 없는 수십 년 단위 값이
+  나온다.
+
+이 접미사는 한번 기록되면 값이 바뀌지 않는다: `thresholds[N]`은
+write-once이며 (3.2), 정상 동작 하에서 스토리가 처음 추적된 이후
+`story_time`도 바뀌지 않는다. 따라서 실시간으로 바뀌는 원본 점수와
+달리, 이 값은 feed reader가 캐시할 수 있는 제목에 안전하게 포함할 수
+있다.
 
 ---
 
