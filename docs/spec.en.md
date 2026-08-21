@@ -299,9 +299,11 @@ topstories, beststories, or newstories.
 
 ### 6.1 Storage
 
-`state.json` lives in the repository root.
-It is the source of truth for tracked stories and is committed to git
-whenever its bytes change.
+`state.json` lives in the repository root at runtime. It is the source of
+truth for tracked stories and is restored from the `state` GitHub Release
+asset at the start of each update run. Whenever its bytes change, the
+workflow replaces that asset before deploying. The file is not tracked by
+git.
 
 ### 6.2 Schema
 
@@ -429,13 +431,13 @@ tracked. All currently crossed thresholds are recorded with `cycle_time`.
 GitHub Actions (cron: */5 * * * *)
   |
   +-> Download pre-built binary from GitHub Release
+  +-> Restore state.json from the `state` GitHub Release
   |
   +-> Loop 5 times, 60s apart:
   |     |
-  |     +-> git pull --rebase (latest state.json)
   |     +-> Run binary --state ./state.json --output ./dist/
   |     +-> Exit code 0 (state or feed output changed):
-  |     |     +-> if state.json changed: git commit state.json + push
+  |     |     +-> Replace the `state` release asset
   |     |     +-> wrangler deploy
   |     +-> Exit code 1 (fatal):
   |     |     +-> Log error, continue loop
@@ -447,7 +449,7 @@ GitHub Actions (cron: */5 * * * *)
 ```
 
 When `state.json` changes, it is the canonical source of truth, so its
-push always happens before deploy.
+release upload always happens before deploy.
 
 ### 7.3 Concurrency
 
@@ -479,10 +481,10 @@ Update workflow downloads the pre-built binary. No Rust in update CI.
 ### 7.6 Failure Recovery
 
 If `wrangler deploy` fails after a successful cycle:
-- If `state.json` changed, the repository already contains the canonical
-  updated state.
+- If `state.json` changed, the `state` release already contains the
+  canonical updated state.
 - If `state.json` did not change, the next cycle regenerates the same
-  output from the existing committed state.
+  output from the existing release asset.
 - Deploy is retried on the next successful cycle.
 - Self-healing. No manual intervention.
 
@@ -525,7 +527,7 @@ hn-scored/
 ├── _headers
 ├── Cargo.toml
 ├── Cargo.lock
-├── state.json
+├── state.json               # Runtime file restored from release (gitignored)
 ├── LICENSE                 # MIT
 ├── README.md
 └── docs/
@@ -942,38 +944,21 @@ slash if present. The normalized value is used for RSS
 
 ## 17. CI Operational Details
 
-### 17.1 Git Author
+### 17.1 Runtime State Persistence
 
-```yaml
-- run: |
-    git config user.name "github-actions[bot]"
-    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-```
+The update workflow downloads `state.json` from the rolling `state` release.
+On exit code 0, it replaces the release asset before deploying. During the
+one-time migration only, a missing `state` release is bootstrapped from a
+tracked `state.json` if one exists.
 
-### 17.2 Git Commit Message
+### 17.2 GitHub Release Tags
 
-Fixed format: `chore: update state ({timestamp})`
+The `latest` release contains the pre-built binary. The build workflow
+**deletes and recreates** it on each successful build. The separate `state`
+release contains the rolling runtime state and is never deleted by the build
+workflow.
 
-Example: `chore: update state (2025-04-14T12:34:56Z)`
-
-### 17.3 Git Pull Conflict
-
-If `git pull --rebase` fails due to conflict on state.json:
-
-```bash
-git checkout --theirs state.json
-git add state.json
-git rebase --continue
-```
-
-Remote state wins. The binary will re-process on the next cycle anyway.
-
-### 17.4 GitHub Release Tag
-
-Tag: `latest`. The build workflow **deletes and recreates** the `latest`
-release on each successful build. No semver. Single rolling release.
-
-### 17.5 Wrangler Version
+### 17.3 Wrangler Version
 
 Pinned in workflow:
 ```yaml
@@ -982,14 +967,14 @@ Pinned in workflow:
 
 Major version pinned, minor/patch float.
 
-### 17.6 GitHub Actions Permissions
+### 17.4 GitHub Actions Permissions
 
 ```yaml
 permissions:
-  contents: write    # For git push and release upload
+  contents: write    # For release upload
 ```
 
-### 17.7 E2E Tests in CI
+### 17.5 E2E Tests in CI
 
 E2E tests that call real HN API are **excluded from the build workflow**.
 They run only via `cargo test --ignored` manually or in a separate

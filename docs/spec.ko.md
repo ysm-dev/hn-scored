@@ -297,9 +297,10 @@ score/comment 값을 유지하도록 한다.
 
 ### 6.1 저장소
 
-`state.json`은 레포지토리 루트에 위치한다.
-이 파일은 추적 중인 스토리의 source of truth이며,
-바이트 내용이 바뀔 때마다 git에 커밋된다.
+`state.json`은 런타임에 레포지토리 루트에 위치한다. 이 파일은 추적 중인
+스토리의 source of truth이며, 각 update run을 시작할 때 `state` GitHub
+Release asset에서 복원된다. 바이트 내용이 바뀌면 workflow는 deploy 전에
+해당 asset을 교체한다. 이 파일은 git에서 추적하지 않는다.
 
 ### 6.2 스키마
 
@@ -426,13 +427,13 @@ score/comment 값을 유지하도록 한다.
 GitHub Actions (cron: */5 * * * *)
   |
   +-> GitHub Release에서 pre-built binary 다운로드
+  +-> `state` GitHub Release에서 state.json 복원
   |
   +-> 5회 반복, 60초 간격:
   |     |
-  |     +-> git pull --rebase (최신 state.json)
   |     +-> binary 실행 --state ./state.json --output ./dist/
   |     +-> Exit code 0 (state 또는 피드 출력 변경):
-  |     |     +-> state.json이 바뀌었으면: git commit state.json + push
+  |     |     +-> `state` release asset 교체
   |     |     +-> wrangler deploy
   |     +-> Exit code 1 (fatal):
   |     |     +-> 에러 로그, 루프 계속
@@ -444,7 +445,7 @@ GitHub Actions (cron: */5 * * * *)
 ```
 
 `state.json`이 변경된 경우, 이것이 canonical source of truth이므로
-해당 push는 반드시 deploy보다 먼저 일어난다.
+release upload는 반드시 deploy보다 먼저 일어난다.
 
 ### 7.3 동시성 제어
 
@@ -477,8 +478,8 @@ update CI에서는 Rust를 컴파일하지 않는다.
 ### 7.6 장애 복구
 
 성공한 cycle 이후 `wrangler deploy`가 실패한 경우:
-- `state.json`이 바뀌었다면, 레포지토리에는 이미 canonical updated state가 들어 있다.
-- `state.json`이 바뀌지 않았다면, 다음 cycle은 기존 committed state에서 동일한 출력을 다시 생성한다.
+- `state.json`이 바뀌었다면, `state` release에는 이미 canonical updated state가 들어 있다.
+- `state.json`이 바뀌지 않았다면, 다음 cycle은 기존 release asset에서 동일한 출력을 다시 생성한다.
 - deploy는 다음 성공적인 cycle에서 재시도된다.
 - 자가 복구된다. 수동 개입은 필요 없다.
 
@@ -521,7 +522,7 @@ hn-scored/
 ├── _headers
 ├── Cargo.toml
 ├── Cargo.lock
-├── state.json
+├── state.json               # Release에서 복원되는 런타임 파일 (gitignored)
 ├── LICENSE                 # MIT
 ├── README.md
 └── docs/
@@ -934,38 +935,20 @@ JSON Feed `feed_url` 생성에 사용한다.
 
 ## 17. CI 운영 세부사항
 
-### 17.1 Git Author
+### 17.1 런타임 상태 영속화
 
-```yaml
-- run: |
-    git config user.name "github-actions[bot]"
-    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-```
+Update workflow는 rolling `state` release에서 `state.json`을 다운로드한다.
+Exit code 0이면 deploy 전에 release asset을 교체한다. 일회성 migration
+중에만 `state` release가 없고 추적 중인 `state.json`이 있으면 해당 파일로
+release를 초기화한다.
 
-### 17.2 Git Commit 메시지
+### 17.2 GitHub Release 태그
 
-고정 형식: `chore: update state ({timestamp})`
+`latest` release에는 pre-built binary가 들어 있다. Build workflow는 성공할
+때마다 이 release를 **삭제 후 재생성**한다. 별도의 `state` release에는
+rolling runtime state가 들어 있으며 build workflow가 삭제하지 않는다.
 
-예: `chore: update state (2025-04-14T12:34:56Z)`
-
-### 17.3 Git Pull 충돌
-
-`git pull --rebase`가 state.json 충돌로 실패할 경우:
-
-```bash
-git checkout --theirs state.json
-git add state.json
-git rebase --continue
-```
-
-remote state가 우선한다. 바이너리는 다음 cycle에서 다시 처리한다.
-
-### 17.4 GitHub Release 태그
-
-태그: `latest`. 빌드 워크플로우는 성공할 때마다 `latest` release를
-**삭제 후 재생성**한다. semver는 없고, 단일 rolling release만 사용한다.
-
-### 17.5 Wrangler 버전
+### 17.3 Wrangler 버전
 
 워크플로우에서 고정:
 ```yaml
@@ -974,14 +957,14 @@ remote state가 우선한다. 바이너리는 다음 cycle에서 다시 처리�
 
 메이저 버전은 고정하고, 마이너/패치는 유동적이다.
 
-### 17.6 GitHub Actions 권한
+### 17.4 GitHub Actions 권한
 
 ```yaml
 permissions:
-  contents: write    # git push 및 release 업로드용
+  contents: write    # release 업로드용
 ```
 
-### 17.7 E2E 테스트와 CI
+### 17.5 E2E 테스트와 CI
 
 실제 HN API를 호출하는 E2E 테스트는 **빌드 워크플로우에서 제외**한다.
 `cargo test --ignored`로 수동 실행하거나 별도 nightly 워크플로우에서만 돌린다.

@@ -20,16 +20,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p ./bin
           gh release download latest --pattern "hn-scored-x86_64-unknown-linux-gnu" --dir ./bin
           chmod +x ./bin/hn-scored-x86_64-unknown-linux-gnu
+
+      - name: Restore runtime state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if gh release view state >/dev/null 2>&1; then
+            mkdir -p ./.state
+            gh release download state --pattern "state.json" --dir ./.state
+            mv ./.state/state.json ./state.json
+          elif [ -f ./state.json ]; then
+            gh release create state ./state.json \
+              --title "Runtime state" \
+              --notes "Rolling runtime state for the update workflow."
+          else
+            echo "state release and bootstrap state.json are missing" >&2
+            exit 1
+          fi
 
       - run: npm install -g wrangler@4
 
@@ -92,24 +107,13 @@ jobs:
 
             queue_successor
 
-            git pull --rebase || {
-              git checkout --theirs state.json
-              git add state.json
-              git rebase --continue
-            }
-
             set +e
             ./bin/hn-scored-x86_64-unknown-linux-gnu --state ./state.json --output ./dist
             code=$?
             set -e
 
             if [ "$code" -eq 0 ]; then
-              if ! git diff --quiet -- state.json; then
-                timestamp=$(node -e "console.log(JSON.parse(require('fs').readFileSync('state.json', 'utf8')).last_output_change_at)")
-                git add state.json
-                git commit -m "chore: update state ($timestamp)"
-                git push
-              fi
+              gh release upload state ./state.json --clobber
               if ! wrangler deploy; then
                 echo "deploy failed"
               fi
