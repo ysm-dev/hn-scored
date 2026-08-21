@@ -433,7 +433,7 @@ GitHub Actions (cron: */5 * * * *)
   +-> Download pre-built binary from GitHub Release
   +-> Restore state.json from the `state` GitHub Release
   |
-  +-> Loop 5 times, 60s apart:
+  +-> Loop for up to 12 minutes, 60s apart:
   |     |
   |     +-> Run binary --state ./state.json --output ./dist/
   |     +-> Exit code 0 (state or feed output changed):

@@ -429,7 +429,7 @@ GitHub Actions (cron: */5 * * * *)
   +-> GitHub Release에서 pre-built binary 다운로드
   +-> `state` GitHub Release에서 state.json 복원
   |
-  +-> 5회 반복, 60초 간격:
+  +-> 최대 12분 동안 반복, 60초 간격:
   |     |
   |     +-> binary 실행 --state ./state.json --output ./dist/
   |     +-> Exit code 0 (state 또는 피드 출력 변경):
