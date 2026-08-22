@@ -4,7 +4,12 @@ use std::{
 };
 
 use axum::http::StatusCode;
-use hn_scored::{api::firebase::FirebaseClient, app, config::AppConfig, state};
+use hn_scored::{
+    api::firebase::FirebaseClient,
+    app,
+    config::{AppConfig, THRESHOLDS},
+    state,
+};
 
 use crate::common::{MockHnServer, fixed_time, sample_item};
 
@@ -49,6 +54,62 @@ async fn score_rise_and_drop_retains_threshold_feed_membership() {
 }
 
 #[tokio::test]
+async fn expired_thresholds_do_not_reenter_feeds_after_rediscovery() {
+    let server = MockHnServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), &server.base_url());
+    server.set_lists(vec![10, 11], vec![], vec![]).await;
+    server.set_item(10, sample_item(10, 120, 5)).await;
+    server.set_item(11, sample_item(11, 1000, 50)).await;
+    app::run_once(&config, fixed_time("2025-04-14T12:00:00Z"), None)
+        .await
+        .unwrap();
+    let mut legacy_state: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.state_path).unwrap()).unwrap();
+    legacy_state.as_object_mut().unwrap().remove("max_scores");
+    fs::write(
+        &config.state_path,
+        serde_json::to_vec_pretty(&legacy_state).unwrap(),
+    )
+    .unwrap();
+
+    app::run_once(&config, fixed_time("2025-04-22T12:00:00Z"), None)
+        .await
+        .unwrap();
+
+    let state = state::store::load_state(&config.state_path).unwrap();
+    assert!(state.stories.is_empty());
+    assert_eq!(state.max_scores.get(&10), Some(&120));
+    assert_eq!(state.max_scores.get(&11), Some(&1000));
+    assert_story_absent_from_all_feed_variants(&config, 0, 10);
+    assert_story_absent_from_all_feed_variants(&config, 50, 10);
+    assert_story_absent_from_all_feed_variants(&config, 100, 10);
+    for threshold in THRESHOLDS {
+        assert_story_absent_from_all_feed_variants(&config, threshold, 11);
+    }
+
+    server.set_item(10, sample_item(10, 160, 6)).await;
+    app::run_once(&config, fixed_time("2025-04-22T12:01:00Z"), None)
+        .await
+        .unwrap();
+
+    let state = state::store::load_state(&config.state_path).unwrap();
+    let story = state.stories.get(&10).unwrap();
+    assert_eq!(state.max_scores.get(&10), Some(&160));
+    assert_eq!(
+        story.thresholds.keys().copied().collect::<Vec<_>>(),
+        vec![150]
+    );
+    assert_story_absent_from_all_feed_variants(&config, 0, 10);
+    assert_story_absent_from_all_feed_variants(&config, 50, 10);
+    assert_story_absent_from_all_feed_variants(&config, 100, 10);
+    assert_story_present_in_all_feed_variants(&config, 150, 10);
+    for threshold in THRESHOLDS {
+        assert_story_absent_from_all_feed_variants(&config, threshold, 11);
+    }
+}
+
+#[tokio::test]
 async fn dead_story_is_removed_from_state_and_feeds() {
     let server = MockHnServer::start().await;
     let dir = tempfile::tempdir().unwrap();
@@ -69,8 +130,16 @@ async fn dead_story_is_removed_from_state_and_feeds() {
         .unwrap();
     let state = state::store::load_state(&config.state_path).unwrap();
     assert!(state.stories.is_empty());
-    let rss = fs::read_to_string(config.output_dir.join("feeds/article/100.xml")).unwrap();
-    assert!(!rss.contains("item?id=2"));
+    assert_eq!(state.max_scores.get(&2), Some(&150));
+    assert_story_absent_from_all_feed_variants(&config, 100, 2);
+
+    server.set_item(2, sample_item(2, 150, 13)).await;
+    app::run_once(&config, fixed_time("2025-04-14T12:02:00Z"), None)
+        .await
+        .unwrap();
+    let state = state::store::load_state(&config.state_path).unwrap();
+    assert!(state.stories.is_empty());
+    assert_story_absent_from_all_feed_variants(&config, 100, 2);
 }
 
 #[tokio::test]
@@ -173,6 +242,35 @@ async fn feed_caps_at_two_hundred_items_with_descending_id_tiebreak() {
     let rss = fs::read_to_string(config.output_dir.join("feeds/article/0.xml")).unwrap();
     assert!(rss.contains("item?id=205"));
     assert!(!rss.contains("item?id=5</guid>"));
+}
+
+fn assert_story_absent_from_all_feed_variants(config: &AppConfig, threshold: u16, id: u64) {
+    assert_story_presence_in_all_feed_variants(config, threshold, id, false);
+}
+
+fn assert_story_present_in_all_feed_variants(config: &AppConfig, threshold: u16, id: u64) {
+    assert_story_presence_in_all_feed_variants(config, threshold, id, true);
+}
+
+fn assert_story_presence_in_all_feed_variants(
+    config: &AppConfig,
+    threshold: u16,
+    id: u64,
+    expected: bool,
+) {
+    for kind in ["article", "comments"] {
+        for extension in ["xml", "atom", "json"] {
+            let path = config
+                .output_dir
+                .join(format!("feeds/{kind}/{threshold}.{extension}"));
+            let feed = fs::read_to_string(path).unwrap();
+            assert_eq!(
+                feed.contains(&format!("item?id={id}")),
+                expected,
+                "unexpected story presence in {kind}/{threshold}.{extension}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

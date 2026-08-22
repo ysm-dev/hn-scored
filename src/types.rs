@@ -37,6 +37,7 @@ pub struct Story {
 pub struct State {
     pub version: u64,
     pub last_output_change_at: Timestamp,
+    pub max_scores: BTreeMap<u64, i64>,
     pub stories: BTreeMap<u64, Story>,
 }
 
@@ -60,6 +61,7 @@ impl State {
         Self {
             version: STATE_VERSION,
             last_output_change_at: Timestamp::epoch(),
+            max_scores: BTreeMap::new(),
             stories: BTreeMap::new(),
         }
     }

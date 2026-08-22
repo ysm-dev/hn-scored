@@ -13,10 +13,12 @@ pub struct UpdateStats {
     pub dead_removed: bool,
     pub crossings: usize,
     pub changed: bool,
+    pub observed_score: Option<i64>,
 }
 
 pub fn apply_item(
     existing: Option<&Story>,
+    previous_max_score: Option<i64>,
     item: &ApiItem,
     cycle_time: &Timestamp,
 ) -> (Option<Story>, UpdateStats) {
@@ -48,8 +50,8 @@ pub fn apply_item(
     }
     let normalized = normalize_item(item);
     match existing {
-        Some(story) => update_existing(story, normalized, cycle_time),
-        None => create_story(normalized, cycle_time),
+        Some(story) => update_existing(story, previous_max_score, normalized, cycle_time),
+        None => create_story(previous_max_score, normalized, cycle_time),
     }
 }
 
@@ -71,17 +73,32 @@ fn normalize_item(item: &ApiItem) -> ApiItem {
     }
 }
 
-fn create_story(item: ApiItem, cycle_time: &Timestamp) -> (Option<Story>, UpdateStats) {
+fn create_story(
+    previous_max_score: Option<i64>,
+    item: ApiItem,
+    cycle_time: &Timestamp,
+) -> (Option<Story>, UpdateStats) {
+    let score = item.score.unwrap_or(0);
     let mut thresholds = BTreeMap::new();
     let crossings =
-        threshold::record_crossings(&mut thresholds, item.score.unwrap_or(0), cycle_time);
+        threshold::record_crossings(&mut thresholds, previous_max_score, score, cycle_time);
+    if thresholds.is_empty() {
+        return (
+            None,
+            UpdateStats {
+                changed: previous_max_score.is_none_or(|previous| score > previous),
+                observed_score: Some(score),
+                ..UpdateStats::default()
+            },
+        );
+    }
     let story = Story {
         id: item.id,
         title: item.title.unwrap_or_default(),
         url: item.url.unwrap_or_default(),
         hn_url: crate::util::hn_item_url(item.id),
-        score: item.score.unwrap_or(0),
-        max_score: item.score.unwrap_or(0),
+        score,
+        max_score: previous_max_score.unwrap_or(score).max(score),
         comments: item.descendants.unwrap_or(0),
         by: item.by.unwrap_or_default(),
         first_seen: cycle_time.clone(),
@@ -95,6 +112,7 @@ fn create_story(item: ApiItem, cycle_time: &Timestamp) -> (Option<Story>, Update
             created: true,
             crossings,
             changed: true,
+            observed_score: Some(score),
             ..UpdateStats::default()
         },
     )
@@ -102,6 +120,7 @@ fn create_story(item: ApiItem, cycle_time: &Timestamp) -> (Option<Story>, Update
 
 fn update_existing(
     story: &Story,
+    previous_max_score: Option<i64>,
     item: ApiItem,
     cycle_time: &Timestamp,
 ) -> (Option<Story>, UpdateStats) {
@@ -123,7 +142,8 @@ fn update_existing(
         next.max_score = score;
         changed = true;
     }
-    let crossings = threshold::record_crossings(&mut next.thresholds, score, cycle_time);
+    let crossings =
+        threshold::record_crossings(&mut next.thresholds, previous_max_score, score, cycle_time);
     changed |= crossings > 0;
     if changed {
         next.last_output_change_at = cycle_time.clone();
@@ -133,6 +153,7 @@ fn update_existing(
         UpdateStats {
             crossings,
             changed,
+            observed_score: Some(score),
             ..UpdateStats::default()
         },
     )

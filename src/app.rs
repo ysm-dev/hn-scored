@@ -47,10 +47,19 @@ pub async fn run_once(
         let Ok(item) = result.item else { continue };
         fetched += 1;
         let current = state.stories.get(&item.id).cloned();
-        let (next, stats) = state::update::apply_item(current.as_ref(), &item, &cycle_time);
+        let previous_max_score = state.max_scores.get(&item.id).copied();
+        let (next, stats) =
+            state::update::apply_item(current.as_ref(), previous_max_score, &item, &cycle_time);
         created += usize::from(stats.created);
         dead += usize::from(stats.dead_removed);
         crossings += stats.crossings;
+        if let Some(score) = stats.observed_score {
+            state
+                .max_scores
+                .entry(item.id)
+                .and_modify(|maximum| *maximum = (*maximum).max(score))
+                .or_insert(score);
+        }
         match next {
             Some(story) => {
                 state.stories.insert(story.id, story);

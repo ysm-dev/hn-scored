@@ -103,8 +103,8 @@ https://hn.ysm.dev/feeds/article/100.json       # JSON Feed
 만료될 때까지 유지된다.
 
 **예외**: 성공적인 fetch가 `dead == true` 또는 `deleted == true`를
-반환하면, 해당 스토리는 모든 피드에서 즉시 제거하고 state에서도
-즉시 삭제한다.
+반환하면, 해당 스토리는 모든 피드와 active `stories` 맵에서 즉시
+제거한다. `max_scores` 이력은 유지한다.
 
 ### 3.3 예상 볼륨
 
@@ -268,7 +268,7 @@ score/comment 값을 유지하도록 한다.
  1. 프로세스 시작 시 `cycle_time` 캡처
  2. state.json 로드
  3. 정리: `cycle_time - 7 days`보다 오래된 threshold 타임스탬프 제거,
-    threshold가 하나도 남지 않은 스토리 제거
+    threshold가 하나도 남지 않은 스토리 제거, `max_scores`는 유지
  4. `topstories` + `beststories` + `newstories` 병렬 fetch
  5. fetch set 구성 = 중복 제거된 discovery ID + retained state ID
  6. 스토리 상세 정보 fetch (50 동시, 각 3회 재시도)
@@ -278,7 +278,8 @@ score/comment 값을 유지하도록 한다.
     b. `type != "story"`이면 기존 state가 있으면 제거, 없으면 skip
     c. dead/deleted면 state에서 제거 후 skip
     d. 필드 정규화 후 state 업데이트
-    e. 새로운 threshold crossing을 `cycle_time`으로 기록
+    e. 영속된 이전 최고 점수보다 높은 새 threshold crossing만
+       `cycle_time`으로 기록하고 `max_scores` 갱신
     f. 영속 필드나 threshold map에 변경이 있으면
        `last_output_change_at = cycle_time`으로 설정
  8. 실패한 스토리 fetch에 대해서는 기존 state를 그대로 유지하고,
@@ -308,6 +309,9 @@ Release asset에서 복원된다. 바이트 내용이 바뀌면 workflow는 depl
 {
   "version": 1,
   "last_output_change_at": "2025-04-14T15:00:56Z",
+  "max_scores": {
+    "8863": 450
+  },
   "stories": {
     "8863": {
       "id": 8863,
@@ -338,6 +342,7 @@ Release asset에서 복원된다. 바이트 내용이 바뀌면 workflow는 depl
 |-------------|------|
 | `version` | 스키마 버전 |
 | `last_output_change_at` | 영속 state가 마지막으로 변한 `cycle_time`. `stories`가 비어 있으면 `1970-01-01T00:00:00Z` 사용. |
+| `max_scores` | 문자열 HN item ID -> 지금까지 관측한 최고 점수의 영속 맵. entry는 만료되지 않는다. |
 | `stories` | 문자열 HN item ID -> story object 맵 |
 
 | Story 필드 | 설명 |
@@ -357,16 +362,19 @@ Release asset에서 복원된다. 바이트 내용이 바뀌면 workflow는 depl
 
 ### 6.3 생애주기
 
-1. **최초 발견**: 현재 넘은 모든 threshold를 `cycle_time`으로 기록한다.
-   `first_seen`과 story `last_output_change_at`도 둘 다 `cycle_time`으로 설정한다.
+1. **최초 발견**: ID에 `max_scores` 이력이 없을 때만 현재 넘은 모든
+   threshold를 `cycle_time`으로 기록한다. `first_seen`과 story
+   `last_output_change_at`도 둘 다 `cycle_time`으로 설정한다.
 2. **점수/댓글/제목/URL/작성자 변경**: 필드를 갱신하고
    story `last_output_change_at = cycle_time`으로 설정한다.
-3. **점수 상승**: 필요하면 `max_score`를 갱신하고,
-   새 threshold crossing을 `cycle_time`으로 기록한다.
+3. **점수 상승**: 필요하면 `max_score`와 `max_scores`를 갱신하고,
+   영속된 이전 최고 점수보다 높은 threshold만 `cycle_time`으로 기록한다.
 4. **점수 하락**: 현재 `score`만 갱신한다. 기존 threshold 타임스탬프는 바뀌지 않는다.
-5. **dead/deleted 또는 non-story**: entry를 완전히 제거한다.
-6. **정리**: 7일이 지난 threshold 타임스탬프를 제거한다.
-   threshold가 하나도 남지 않으면 story를 제거한다. `first_seen`은 만료 판단에 사용하지 않는다.
+5. **dead/deleted 또는 non-story**: active story entry를 제거한다. 이전
+   feed에 다시 들어가지 않도록 `max_scores` 이력은 유지한다.
+6. **정리**: 7일이 지난 threshold 타임스탬프를 제거한다. threshold가
+   하나도 남지 않으면 story를 제거하지만 `max_scores`는 유지한다.
+   `first_seen`은 만료 판단에 사용하지 않는다.
 7. **최상위 타임스탬프**: `last_output_change_at`은 story별
    `last_output_change_at`의 최댓값이며, state가 비어 있으면 Unix epoch이다.
 
@@ -374,11 +382,14 @@ Release asset에서 복원된다. 바이트 내용이 바뀌면 workflow는 depl
 
 최초 실행 시 (빈 state), 유효한 discovered story는 모두 새로 추적된다.
 현재 충족 중인 threshold는 모두 `cycle_time`으로 기록한다.
+`max_scores`가 없는 이전 version-1 파일을 로드할 때는 새 응답을 처리하기
+전에 retained story의 `max_score`에서 ledger를 생성한다.
 
 ### 6.5 크기
 
-최대 약 3,500개 항목 (7일 x 500/일). 항목당 약 250바이트.
-총 약 900KB.
+active story entry는 최대 약 3,500개 (7일 x 500/일)이며, 여기에 관측한
+story마다 만료되지 않는 compact `max_scores` entry 하나가 추가된다.
+중복 방지를 보장하려면 crossing 이력이 필요하므로 ledger는 영속한다.
 
 ---
 
@@ -853,7 +864,9 @@ Exit code 1은 치명적 에러를 의미한다 (15.10 참조).
 - **Pretty-print**: 2칸 들여쓰기.
 - **UTF-8** 인코딩, BOM 없음.
 - **LF 줄바꿈**을 사용하고 파일 끝에 trailing newline을 둔다.
-- 최상위 키 순서는 정확히 `version`, `last_output_change_at`, `stories`.
+- 최상위 키 순서는 정확히 `version`, `last_output_change_at`,
+  `max_scores`, `stories`.
+- `max_scores`는 문자열 ID를 키로 사용하며 numeric ID 오름차순으로 정렬한다.
 - story는 문자열 ID (`"8863"`, `8863` 아님)를 키로 사용하며,
   numeric ID 오름차순으로 정렬한다.
 - story object의 키 순서는 정확히 `id`, `title`, `url`, `hn_url`,
@@ -1128,7 +1141,8 @@ minutes = total_minutes % 60
   나온다.
 
 이 접미사는 한번 기록되면 값이 바뀌지 않는다: `thresholds[N]`은
-write-once이며 (3.2), 정상 동작 하에서 스토리가 처음 추적된 이후
+write-once이고, `max_scores`가 영속되므로 만료된 threshold가 다시
+생성되지 않으며, 정상 동작 하에서 스토리가 처음 추적된 이후
 `story_time`도 바뀌지 않는다. 따라서 실시간으로 바뀌는 원본 점수와
 달리, 이 값은 feed reader가 캐시할 수 있는 제목에 안전하게 포함할 수
 있다.

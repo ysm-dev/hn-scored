@@ -104,7 +104,7 @@ until it expires.
 
 **Exception**: If a successful fetch reports `dead == true` or
 `deleted == true`, remove the story from all feeds and purge it from
-state immediately.
+the active `stories` map immediately. Preserve its `max_scores` history.
 
 ### 3.3 Approximate Volume
 
@@ -268,7 +268,7 @@ topstories, beststories, or newstories.
  1. Capture `cycle_time` at process start
  2. Load state.json
  3. Cleanup: remove threshold timestamps older than `cycle_time - 7 days`
-    and remove stories with no thresholds left
+    and remove stories with no thresholds left; retain `max_scores`
  4. Fetch `topstories` + `beststories` + `newstories` in parallel
  5. Build the fetch set = deduplicated discovery IDs + retained state IDs
  6. Fetch story details (50 concurrent, 3 retries each)
@@ -278,7 +278,8 @@ topstories, beststories, or newstories.
     b. If `type != "story"`: remove from state if present; otherwise skip
     c. If dead/deleted: remove from state, skip
     d. Normalize fields and update state
-    e. Record new threshold crossings with `cycle_time`
+    e. Record only threshold crossings above the durable prior maximum with
+       `cycle_time`, then update `max_scores`
     f. If any persisted field or threshold map changed, set
        `last_output_change_at = cycle_time`
  8. For each failed story fetch: keep existing state unchanged;
@@ -311,6 +312,9 @@ git.
 {
   "version": 1,
   "last_output_change_at": "2025-04-14T15:00:56Z",
+  "max_scores": {
+    "8863": 450
+  },
   "stories": {
     "8863": {
       "id": 8863,
@@ -341,6 +345,7 @@ git.
 |-----------------|-------------|
 | `version` | Schema version |
 | `last_output_change_at` | Latest `cycle_time` that changed persisted state. Use `1970-01-01T00:00:00Z` when `stories` is empty. |
+| `max_scores` | Durable map of string HN item ID -> highest score ever observed. Entries do not expire. |
 | `stories` | Map of string HN item ID -> story object |
 
 | Story field | Description |
@@ -360,18 +365,20 @@ git.
 
 ### 6.3 Lifecycle
 
-1. **First seen**: All currently-crossed thresholds recorded with
-   `cycle_time`. `first_seen` and story `last_output_change_at` are both
-   set to `cycle_time`.
+1. **First seen**: If the ID has no `max_scores` history, all
+   currently-crossed thresholds are recorded with `cycle_time`. `first_seen`
+   and story `last_output_change_at` are both set to `cycle_time`.
 2. **Score/comments/title/url/by changes**: Update the field and set
    story `last_output_change_at = cycle_time`.
-3. **Score increases**: Update `max_score` if needed and record any new
-   threshold crossings with `cycle_time`.
+3. **Score increases**: Update `max_score` and `max_scores` if needed and
+   record only thresholds above the durable prior maximum with `cycle_time`.
 4. **Score decreases**: Update current `score`. Existing threshold
    timestamps do not change.
-5. **Dead/deleted or non-story**: Remove the entry entirely.
+5. **Dead/deleted or non-story**: Remove the active story entry. Preserve its
+   `max_scores` history so it cannot re-enter an old feed.
 6. **Cleanup**: Remove threshold timestamps older than 7 days. Remove the
-   story if it has no thresholds left. `first_seen` is never used for expiry.
+   story if it has no thresholds left, but preserve `max_scores`. `first_seen`
+   is never used for expiry.
 7. **Top-level timestamp**: `last_output_change_at` equals the maximum
    story `last_output_change_at`, or the Unix epoch if state is empty.
 
@@ -379,10 +386,14 @@ git.
 
 On first run (empty state), all valid discovered stories are newly
 tracked. All currently crossed thresholds are recorded with `cycle_time`.
+When loading an older version-1 file without `max_scores`, derive the ledger
+from every retained story's `max_score` before processing new responses.
 
 ### 6.5 Size
 
-~3,500 entries max (7 days x 500/day). ~250 bytes each. ~900KB total.
+~3,500 active story entries max (7 days x 500/day), plus one compact,
+non-expiring `max_scores` entry per observed story. The ledger is intentionally
+durable because guaranteed duplicate prevention requires crossing history.
 
 ---
 
@@ -861,7 +872,9 @@ Exit code 1 means a fatal error occurred (see 15.10).
 - **Pretty-printed** with 2-space indentation (human-readable git diffs).
 - **UTF-8** encoding, no BOM.
 - **LF line endings** and a trailing newline at end of file.
-- Top-level key order is exactly: `version`, `last_output_change_at`, `stories`.
+- Top-level key order is exactly: `version`, `last_output_change_at`,
+  `max_scores`, `stories`.
+- `max_scores` is keyed by string ID and sorted by numeric ID ascending.
 - Stories are keyed by string ID (`"8863"`, not `8863`) sorted by
   numeric ID ascending.
 - Story object key order is exactly: `id`, `title`, `url`, `hn_url`,
@@ -1140,10 +1153,11 @@ Examples: `(2d 3h 32m)`, `(3h 32m)`, `(32m)`, `(1d 0m)`, `(1h 0m)`.
   from 15.2). Computing elapsed time against the Unix epoch would produce
   a meaningless multi-decade figure.
 
-This suffix does not change once written: `thresholds[N]` is write-once
-(3.2) and `story_time` does not change after a story is first tracked
-under normal operation, so unlike raw score, this value is safe to bake
-into a title that feed readers may cache.
+This suffix does not change once written: `thresholds[N]` is write-once,
+expired thresholds cannot be recreated because `max_scores` is durable, and
+`story_time` does not change after a story is first tracked under normal
+operation. Unlike raw score, this value is safe to bake into a title that feed
+readers may cache.
 
 ---
 

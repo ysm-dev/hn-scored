@@ -42,7 +42,8 @@ fn invalid_response_keeps_existing_story() {
         by: None,
         time: None,
     };
-    let (next, stats) = state::update::apply_item(Some(&existing), &item, &cycle);
+    let (next, stats) =
+        state::update::apply_item(Some(&existing), Some(existing.max_score), &item, &cycle);
     assert_eq!(next.unwrap(), existing);
     assert!(!stats.changed);
 }
@@ -69,6 +70,42 @@ fn state_serialization_orders_numeric_keys() {
     let text = String::from_utf8(state::store::serialize_state(&state).unwrap()).unwrap();
     assert!(text.find("\"2\": {").unwrap() < text.find("\"10\": {").unwrap());
     assert!(text.find("\"50\"").unwrap() < text.find("\"100\"").unwrap());
+}
+
+#[test]
+fn state_load_derives_max_score_history_from_existing_stories() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    let mut state = State::empty();
+    state
+        .stories
+        .insert(1, story_with_thresholds([(100, "2025-04-14T12:00:00Z")]));
+    let mut value = serde_json::to_value(&state).unwrap();
+    value.as_object_mut().unwrap().remove("max_scores");
+    fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+    let loaded = state::store::load_state(&path).unwrap();
+
+    assert_eq!(loaded.max_scores.get(&1), Some(&100));
+}
+
+#[test]
+fn state_load_rejects_malformed_max_score_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    fs::write(
+        &path,
+        br#"{"version":1,"max_scores":{"1":"invalid"},"stories":{}}"#,
+    )
+    .unwrap();
+
+    let error = state::store::load_state(&path).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("invalid state.json max_scores value")
+    );
 }
 
 fn story_with_thresholds<const N: usize>(pairs: [(u16, &str); N]) -> Story {

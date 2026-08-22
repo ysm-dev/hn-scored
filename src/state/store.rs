@@ -48,13 +48,42 @@ fn parse_state(value: Value) -> Result<State, AppError> {
             }
         }
     }
+    let mut max_scores = parse_max_scores(&value)?;
+    for story in stories.values() {
+        max_scores
+            .entry(story.id)
+            .and_modify(|score| *score = (*score).max(story.max_score))
+            .or_insert(story.max_score);
+    }
     let mut state = State {
         version: STATE_VERSION,
         last_output_change_at: Timestamp::epoch(),
+        max_scores,
         stories,
     };
     state.recompute_last_output_change_at();
     Ok(state)
+}
+
+fn parse_max_scores(value: &Value) -> Result<BTreeMap<u64, i64>, AppError> {
+    let Some(value) = value.get("max_scores") else {
+        return Ok(BTreeMap::new());
+    };
+    let entries = value.as_object().ok_or_else(|| {
+        AppError::Serialization("invalid state.json max_scores object".to_string())
+    })?;
+    entries
+        .iter()
+        .map(|(key, score)| {
+            let id = key.parse().map_err(|_| {
+                AppError::Serialization(format!("invalid state.json max_scores ID: {key}"))
+            })?;
+            let score = score.as_i64().ok_or_else(|| {
+                AppError::Serialization(format!("invalid state.json max_scores value: {key}"))
+            })?;
+            Ok((id, score))
+        })
+        .collect()
 }
 
 fn parse_story(key: &str, value: &Value) -> Option<(u64, Story)> {
