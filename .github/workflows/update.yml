@@ -33,17 +33,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          if gh release view state >/dev/null 2>&1; then
-            mkdir -p ./.state
-            gh release download state --pattern "state.json" --dir ./.state
-            mv ./.state/state.json ./state.json
-          elif [ -f ./state.json ]; then
-            gh release create state ./state.json \
+          mkdir -p ./.state
+
+          if ! gh release view state >/dev/null 2>&1; then
+            gh release create state \
               --title "Runtime state" \
               --notes "Rolling runtime state for the update workflow."
-          else
-            echo "state release and bootstrap state.json are missing" >&2
-            exit 1
+          fi
+
+          release_id=$(gh release view state --json databaseId --jq .databaseId)
+          asset_name=$(gh api --paginate --slurp \
+            "/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" | \
+            jq -r 'add | [.[] | select(.name == "state.json" or (.name | startswith("state-")))] | sort_by(.created_at, .id) | last | .name // empty')
+
+          if [ -n "$asset_name" ]; then
+            gh release download state --pattern "$asset_name" --dir ./.state
+            mv "./.state/$asset_name" ./state.json
+          elif [ ! -f ./state.json ]; then
+            echo "::warning::No runtime state snapshot exists; rebuilding from empty state"
           fi
 
       - run: npm install -g wrangler@4
@@ -62,6 +69,28 @@ jobs:
           next_tick=$start_epoch
           iteration=0
           successor_queued=false
+
+          publish_state() {
+            snapshot="state-${GITHUB_RUN_ID}-${iteration}.json"
+            cp ./state.json "./.state/$snapshot"
+            gh release upload state "./.state/$snapshot"
+
+            release_id=$(gh release view state --json databaseId --jq .databaseId)
+            if ! stale_asset_ids=$(gh api --paginate --slurp \
+              "/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" | \
+              jq -r 'add | [.[] | select(.name == "state.json" or (.name | startswith("state-")))] | sort_by(.created_at, .id) | reverse | .[2:][] | .id'); then
+              echo "state snapshot cleanup listing failed"
+              return 0
+            fi
+
+            while IFS= read -r asset_id; do
+              if [ -n "$asset_id" ] && ! gh api \
+                --method DELETE \
+                "/repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >/dev/null; then
+                echo "state snapshot cleanup failed for asset $asset_id"
+              fi
+            done <<< "$stale_asset_ids"
+          }
 
           queue_successor() {
             if [ "$successor_queued" = true ]; then
@@ -113,7 +142,7 @@ jobs:
             set -e
 
             if [ "$code" -eq 0 ]; then
-              gh release upload state ./state.json --clobber
+              publish_state
               if ! wrangler deploy; then
                 echo "deploy failed"
               fi

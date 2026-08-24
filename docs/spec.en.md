@@ -301,10 +301,10 @@ topstories, beststories, or newstories.
 ### 6.1 Storage
 
 `state.json` lives in the repository root at runtime. It is the source of
-truth for tracked stories and is restored from the `state` GitHub Release
-asset at the start of each update run. Whenever its bytes change, the
-workflow replaces that asset before deploying. The file is not tracked by
-git.
+truth for tracked stories and is restored from the newest snapshot in the
+`state` GitHub Release at the start of each update run. Whenever its bytes
+change, the workflow uploads a new snapshot before deploying and retains the
+newest two snapshots. The file is not tracked by git.
 
 ### 6.2 Schema
 
@@ -448,7 +448,7 @@ GitHub Actions (cron: */5 * * * *)
   |     |
   |     +-> Run binary --state ./state.json --output ./dist/
   |     +-> Exit code 0 (state or feed output changed):
-  |     |     +-> Replace the `state` release asset
+  |     |     +-> Upload a new `state` release snapshot
   |     |     +-> wrangler deploy
   |     +-> Exit code 1 (fatal):
   |     |     +-> Log error, continue loop
@@ -495,7 +495,7 @@ If `wrangler deploy` fails after a successful cycle:
 - If `state.json` changed, the `state` release already contains the
   canonical updated state.
 - If `state.json` did not change, the next cycle regenerates the same
-  output from the existing release asset.
+  output from the newest release snapshot.
 - Deploy is retried on the next successful cycle.
 - Self-healing. No manual intervention.
 
@@ -959,10 +959,12 @@ slash if present. The normalized value is used for RSS
 
 ### 17.1 Runtime State Persistence
 
-The update workflow downloads `state.json` from the rolling `state` release.
-On exit code 0, it replaces the release asset before deploying. During the
-one-time migration only, a missing `state` release is bootstrapped from a
-tracked `state.json` if one exists.
+The update workflow downloads `state.json` from the newest snapshot in the
+rolling `state` release. On exit code 0, it uploads a uniquely named snapshot
+before deploying, then deletes all but the newest two snapshots. Uploading the
+replacement before deleting older snapshots prevents a failed GitHub API call
+from removing the only recoverable state. A missing release is created, and a
+release with no snapshot cold-starts from empty state.
 
 ### 17.2 GitHub Release Tags
 

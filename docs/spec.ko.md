@@ -300,8 +300,9 @@ score/comment 값을 유지하도록 한다.
 
 `state.json`은 런타임에 레포지토리 루트에 위치한다. 이 파일은 추적 중인
 스토리의 source of truth이며, 각 update run을 시작할 때 `state` GitHub
-Release asset에서 복원된다. 바이트 내용이 바뀌면 workflow는 deploy 전에
-해당 asset을 교체한다. 이 파일은 git에서 추적하지 않는다.
+Release의 최신 snapshot에서 복원된다. 바이트 내용이 바뀌면 workflow는
+deploy 전에 새 snapshot을 업로드하고 최신 snapshot 두 개를 유지한다. 이
+파일은 git에서 추적하지 않는다.
 
 ### 6.2 스키마
 
@@ -444,7 +445,7 @@ GitHub Actions (cron: */5 * * * *)
   |     |
   |     +-> binary 실행 --state ./state.json --output ./dist/
   |     +-> Exit code 0 (state 또는 피드 출력 변경):
-  |     |     +-> `state` release asset 교체
+  |     |     +-> 새 `state` release snapshot 업로드
   |     |     +-> wrangler deploy
   |     +-> Exit code 1 (fatal):
   |     |     +-> 에러 로그, 루프 계속
@@ -490,7 +491,7 @@ update CI에서는 Rust를 컴파일하지 않는다.
 
 성공한 cycle 이후 `wrangler deploy`가 실패한 경우:
 - `state.json`이 바뀌었다면, `state` release에는 이미 canonical updated state가 들어 있다.
-- `state.json`이 바뀌지 않았다면, 다음 cycle은 기존 release asset에서 동일한 출력을 다시 생성한다.
+- `state.json`이 바뀌지 않았다면, 다음 cycle은 최신 release snapshot에서 동일한 출력을 다시 생성한다.
 - deploy는 다음 성공적인 cycle에서 재시도된다.
 - 자가 복구된다. 수동 개입은 필요 없다.
 
@@ -950,10 +951,12 @@ JSON Feed `feed_url` 생성에 사용한다.
 
 ### 17.1 런타임 상태 영속화
 
-Update workflow는 rolling `state` release에서 `state.json`을 다운로드한다.
-Exit code 0이면 deploy 전에 release asset을 교체한다. 일회성 migration
-중에만 `state` release가 없고 추적 중인 `state.json`이 있으면 해당 파일로
-release를 초기화한다.
+Update workflow는 rolling `state` release의 최신 snapshot에서 `state.json`을
+다운로드한다. Exit code 0이면 deploy 전에 고유한 이름의 snapshot을 업로드한
+뒤 최신 두 개를 제외한 snapshot을 삭제한다. 이전 snapshot을 삭제하기 전에
+새 snapshot을 업로드하므로 GitHub API 호출이 실패해도 복구 가능한 유일한
+state가 사라지지 않는다. Release가 없으면 새로 만들고, snapshot이 하나도
+없으면 빈 state로 cold start한다.
 
 ### 17.2 GitHub Release 태그
 
